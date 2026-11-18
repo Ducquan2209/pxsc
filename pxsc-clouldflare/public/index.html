@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0d6efd">
+  <title>QLHC PXSC - Phân xưởng Sửa chữa</title>
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="QLHC PXSC">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <style>
+    html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; }
+    #thanh { height: 48px; display: flex; align-items: center; justify-content: space-between;
+             padding: 0 10px; background: #0d6efd; color: #fff; box-sizing: border-box; }
+    #thanh b { font-size: 15px; }
+    #btnBell { background: #fff; color: #0d6efd; border: none; border-radius: 6px;
+               padding: 6px 10px; font-weight: bold; font-size: 14px; }
+    #btnBell:disabled { opacity: .6; }
+    #app { position: fixed; top: 48px; left: 0; right: 0; bottom: 0; width: 100%; height: calc(100% - 48px); border: 0; }
+    #modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 10;
+             align-items: center; justify-content: center; }
+    #modal .hop { background: #fff; width: 90%; max-width: 380px; padding: 18px; border-radius: 10px; box-sizing: border-box; }
+    #modal input { width: 100%; padding: 10px; font-size: 16px; box-sizing: border-box; margin: 8px 0 12px; }
+    #modal button { width: 100%; padding: 11px; font-size: 16px; font-weight: bold; background: #0d6efd; color: #fff; border: none; border-radius: 8px; }
+    .note { font-size: 13px; color: #555; line-height: 1.5; }
+    .loi { color: #dc3545; font-weight: bold; }
+    .ok { color: #198754; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div id="thanh">
+    <span style="display:flex; align-items:center; gap:8px;"><img src="/logo-thanh.png" alt="" style="width:32px; height:32px; border-radius:50%; background:#fff;"><b>QLHC PXSC</b></span>
+    <button id="btnBell" onclick="moBat()">🔔 Bật thông báo</button>
+  </div>
+
+  <!-- Ứng dụng QLHC (Apps Script) hiển thị trong khung này -->
+  <iframe id="app" src="https://script.google.com/macros/s/AKfycbzydZU8tiI05EUYLEsdNfQGRfiAFUbwflHXo5Lwo4bui4njP3sRlQk7wKGmOY5ges74jg/exec" allow="clipboard-write"></iframe>
+
+  <div id="modal">
+    <div class="hop">
+      <b>Bật thông báo trên điện thoại</b>
+      <p class="note">
+        <b>iPhone:</b> phải thêm trang này vào màn hình chính (Chia sẻ → Thêm vào Màn hình chính) và mở từ biểu tượng đó. iOS 16.4 trở lên.<br>
+        <b>Android:</b> dùng Chrome.
+      </p>
+      <label class="note">Mã PIN của bạn</label>
+      <input id="pin" type="password" inputmode="numeric" autocomplete="off">
+      <button id="btnXacNhan" onclick="batThongBao()">Bật thông báo</button>
+      <p id="kq" class="note"></p>
+    </div>
+  </div>
+
+  <script>
+  const VAPID_PUBLIC_KEY = 'BFFpSS95v8AdcM2p2-3VuQcU0cTLs9k1xK1LMIEEoVFp2e-QZMaOC-qnc7IakLVTfLXZg3pL3Mcw4YuP4wJlq60';
+  const GAS_URL = 'https://script.google.com/macros/s/AKfycbzydZU8tiI05EUYLEsdNfQGRfiAFUbwflHXo5Lwo4bui4njP3sRlQk7wKGmOY5ges74jg/exec';
+  const TOKEN_KEY = 'pxsc_push_token';
+
+  document.getElementById('app').src = GAS_URL;
+
+  function doiKhoa(base64) {
+    const pad = '='.repeat((4 - base64.length % 4) % 4);
+    const b64 = (base64 + pad).replace(/-/g, '+').replace(/_/g, '/');
+    const raw = atob(b64);
+    return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+  }
+
+  // Kiểm tra đăng ký hiện tại có đúng khóa VAPID đang dùng không
+  function khoaTrungNhau(sub) {
+    if (!sub || !sub.options || !sub.options.applicationServerKey) return false;
+    const a = new Uint8Array(sub.options.applicationServerKey);
+    const b = doiKhoa(VAPID_PUBLIC_KEY);
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
+  // Lấy đăng ký hiện có (giữ nguyên nếu đúng khóa, không tạo mới)
+  async function layDangKy() {
+    const reg = await navigator.serviceWorker.register('/sw.js');
+    await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (sub && !khoaTrungNhau(sub)) { await sub.unsubscribe(); sub = null; }
+    return { reg, sub };
+  }
+
+  function danhDauDaBat() {
+    document.getElementById('btnBell').textContent = '🔔 Đã bật';
+  }
+
+  // Tự chạy khi mở app: không hỏi PIN, không hiện modal
+  async function tuDongDongBo() {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    if (Notification.permission !== 'granted') return;
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token) return;
+    try {
+      const { sub } = await layDangKy();
+      if (!sub) return;
+      await fetch(GAS_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: 'xacNhanPush', token: token, subscription: sub.toJSON() })
+      });
+      danhDauDaBat();
+    } catch (e) { /* lỗi thì người dùng vẫn bấm nút được */ }
+  }
+
+  function moBat() {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      alert('Trình duyệt này không hỗ trợ thông báo. Dùng Chrome (Android) hoặc mở từ màn hình chính (iPhone).');
+      return;
+    }
+    document.getElementById('modal').style.display = 'flex';
+  }
+
+  async function batThongBao() {
+    const pin = document.getElementById('pin').value.trim();
+    const kq = document.getElementById('kq');
+    const btn = document.getElementById('btnXacNhan');
+    if (!pin) { kq.innerHTML = '<span class="loi">Nhập mã PIN trước.</span>'; return; }
+    btn.disabled = true;
+    kq.textContent = 'Đang đăng ký...';
+    try {
+      const quyen = await Notification.requestPermission();
+      if (quyen !== 'granted') throw new Error('Bạn chưa cho phép thông báo.');
+
+      const { reg, sub: subCu } = await layDangKy();
+      const sub = subCu || await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: doiKhoa(VAPID_PUBLIC_KEY)
+      });
+
+      // Dùng lại token đã lưu trên máy; chỉ tạo mới nếu chưa có
+      let token = localStorage.getItem(TOKEN_KEY);
+      if (!token) { token = crypto.randomUUID(); localStorage.setItem(TOKEN_KEY, token); }
+
+      await fetch(GAS_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: 'dangKyPush', pin: pin, token: token, subscription: sub.toJSON() })
+      });
+
+      kq.innerHTML = '<span class="ok">Đã gửi yêu cầu.</span> Nếu PIN đúng, trong vài giây bạn sẽ nhận một thông báo thử.';
+      danhDauDaBat();
+      setTimeout(() => { document.getElementById('modal').style.display = 'none'; }, 2000);
+    } catch (e) {
+      kq.innerHTML = '<span class="loi">Lỗi: ' + e.message + '</span>';
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  document.getElementById('modal').addEventListener('click', function (e) {
+    if (e.target === this) this.style.display = 'none';
+  });
+
+  tuDongDongBo();
+</script>
+</body>
+</html>
